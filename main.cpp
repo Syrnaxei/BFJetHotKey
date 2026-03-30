@@ -11,7 +11,12 @@ const WORD SCANCODE_NUMPAD6 = 77;  // 小键盘6 (右)
 const WORD SCANCODE_NUMPAD8 = 72;  // 小键盘8 (上)
 
 // ==========================================
-// 2. 键盘模拟模块
+// 2. 全局状态变量
+// ==========================================
+bool g_bMappingEnabled = false; //
+
+// ==========================================
+// 3. 键盘模拟模块
 // ==========================================
 namespace KeySimulator {
     // 统一封装按下和释放的逻辑
@@ -31,7 +36,7 @@ namespace KeySimulator {
 }
 
 // ==========================================
-// 3. 输入映射与状态管理模块
+// 4. 输入映射与状态管理模块
 // ==========================================
 namespace InputMapper {
     HHOOK hMouseHook = NULL;
@@ -65,7 +70,7 @@ namespace InputMapper {
 
     // 鼠标钩子回调
     LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
-        if (nCode >= 0) {
+        if (nCode >= 0 && g_bMappingEnabled) {
             MSLLHOOKSTRUCT* pMouse = (MSLLHOOKSTRUCT*)lParam;
             DWORD xButton = GET_XBUTTON_WPARAM(pMouse->mouseData);
 
@@ -107,13 +112,17 @@ namespace InputMapper {
 }
 
 // ==========================================
-// 4. 托盘图标与窗口消息模块
+// 5. 托盘图标与窗口消息模块
 // ==========================================
 namespace TrayApp {
     const UINT WM_TRAYICON = WM_USER + 1;
     const UINT ID_EXIT = 1001;
+    const UINT ID_TOGGLE = 1002;
     NOTIFYICONDATA nid = { 0 };
     HMENU hTrayMenu = NULL;
+
+    //向前声明
+    void UpdateTrayIconAndMenu();
 
     void AddIcon(HWND hWnd) {
         // 1. 强制清零结构体，防止内存中的垃圾数据导致图标加载失败
@@ -131,24 +140,52 @@ namespace TrayApp {
         // 3. 加载图标
         HICON hIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_MAIN_ICON));
         
-        // 容错处理：如果自定义图标加载失败（比如文件丢失），使用系统默认图标
+        // 容错处理：如果自定义图标加载失败，使用系统默认图标
         if (!hIcon) {
             hIcon = LoadIcon(NULL, IDI_APPLICATION);
         }
         
         nid.hIcon = hIcon;
         
-        lstrcpyA(nid.szTip, "BFJetKeyMapping - Running");
+        if(g_bMappingEnabled) {
+            lstrcpyA(nid.szTip, "BFJetKeyMapping - Running");
+        }else{
+            lstrcpyA(nid.szTip, "BFJetKeyMapping - Paused");
+        }
 
-        // 4. 关键修复：先尝试修改已存在的图标记录
+        // 4. 先尝试修改已存在的图标记录
         // 如果程序上次非正常退出，托盘里可能还有残留，NIM_MODIFY 会尝试更新它
         Shell_NotifyIconA(NIM_MODIFY, &nid);
         
         // 5. 正式添加图标
         Shell_NotifyIconA(NIM_ADD, &nid);
 
+//        hTrayMenu = CreatePopupMenu();
+//        AppendMenuA(hTrayMenu, MF_STRING, ID_EXIT, "Exit");
+    }
+
+    void UpdateTrayIconAndMenu() {
+        if(hTrayMenu){
+            DestroyMenu(hTrayMenu);
+        }
         hTrayMenu = CreatePopupMenu();
+
+        if(g_bMappingEnabled) {
+            AppendMenuA(hTrayMenu, MF_STRING, ID_TOGGLE, "Turn OFF");
+        }else{
+            AppendMenuA(hTrayMenu, MF_STRING, ID_TOGGLE, "Turn ON");
+        }
+
+        AppendMenuA(hTrayMenu, MF_SEPARATOR, 0, NULL);
         AppendMenuA(hTrayMenu, MF_STRING, ID_EXIT, "Exit");
+
+        if(g_bMappingEnabled) {
+            lstrcpyA(nid.szTip, "BFJetKeyMapping - Running");
+        }else{
+            lstrcpyA(nid.szTip, "BFJetKeyMapping - Paused");
+        }
+
+        Shell_NotifyIconA(NIM_MODIFY, &nid);
     }
 
     void RemoveIcon() {
@@ -160,6 +197,7 @@ namespace TrayApp {
         switch (msg) {
             case WM_TRAYICON:
                 if (lParam == WM_RBUTTONUP) {
+                    UpdateTrayIconAndMenu();
                     POINT pt;
                     GetCursorPos(&pt);
                     SetForegroundWindow(hWnd);
@@ -168,7 +206,14 @@ namespace TrayApp {
                 }
                 break;
             case WM_COMMAND:
-                if (LOWORD(wParam) == ID_EXIT) {
+                if(LOWORD(wParam) == ID_TOGGLE){
+                    //切换前先释放所有模拟按键
+                    if(g_bMappingEnabled){
+                        InputMapper::ReleaseAll();
+                    }
+                    g_bMappingEnabled = !g_bMappingEnabled;
+                    UpdateTrayIconAndMenu();
+                }else if (LOWORD(wParam) == ID_EXIT) {
                     PostQuitMessage(0);
                 }
                 break;
@@ -184,7 +229,7 @@ namespace TrayApp {
 }
 
 // ==========================================
-// 5. 应用程序入口
+// 6. 应用程序入口
 // ==========================================
 int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
     // 注册 Message-Only 窗口类
